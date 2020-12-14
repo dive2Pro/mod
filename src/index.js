@@ -1,17 +1,29 @@
-import React from 'react';
-import ReactDOM from 'react-dom';
-import './index.css';
-import App from './App';
-import reportWebVitals from './reportWebVitals';
+import React from "react";
+import ReactDOM from "react-dom";
+import store, { useRemoduler } from "./mod";
+import { Provider } from "react-redux";
 
+function Toggle() {
+  const { state, actions } = useRemoduler("moduleB");
+  return (
+    <div>
+      <input
+        type="checkbox"
+        onChange={() => {
+          actions.getAddress("asd", "qwe");
+        }}
+      />
+      {Object.keys(state)}
+    </div>
+  );
+}
+
+const rootElement = document.getElementById("root");
 ReactDOM.render(
   <React.StrictMode>
-    <App />
+    <Provider store={store}>
+      <Toggle />
+    </Provider>
   </React.StrictMode>,
-  document.getElementById('root')
+  rootElement
 );
-
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
-reportWebVitals();
