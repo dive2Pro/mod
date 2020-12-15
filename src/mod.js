@@ -1,6 +1,6 @@
 /* eslint-disable */
 // what i want
-import { useDispatch, useSelector, useStore } from "react-redux";
+import { connect, useDispatch, useSelector, useStore } from "react-redux";
 import { produce } from "immer";
 import React from "react";
 import { applyMiddleware, combineReducers, compose, createStore } from "redux";
@@ -29,7 +29,61 @@ import thunk from "redux-thunk";
  * }
  */
 
-export const register = (modules, setup) => {};
+/**
+ *
+ * @param {*} modules:
+ * - 可以是 ['moduleB'] 这样会监听整个 module 的改变
+ * - 或者 { module: 'moduleB',  state : () => {} , actions: () => {} } 只有当这些变化的时候才触发 rerender
+ * @param {*} setup
+ */
+export const register = (modules) => {
+  if (Array.isArray(modules)) {
+      // 
+  } else if (
+    typeof modules === "string" ||
+    (typeof modules === "object" && Object.keys(modules).length > 0)
+  ) {
+    modules = [modules];
+  } else if (!modules || Object.keys(modules).length === 0) {
+    modules = [];
+  }
+  return (WrapperComponent) => {
+    const mapStateToProps = (state, ...rest) => {
+      const mapState = {};
+      modules.forEach((mod) => {
+        if (mod.state) {
+          mapState[mod.module] = mod.state(state[mod.module], ...rest);
+        } else {
+          mapState[mod] = state[mod] || state[mod.module];
+        }
+      });
+      return Object.keys(mapState).length > 0 ? mapState : undefined;
+    };
+
+    const mapDispatchToProps = (dispatch) => {
+      let mapDispatch = {
+          dispatch
+      };
+      modules.forEach((mod) => {
+        if (mod.actions) {
+          mapDispatch = {
+            ...mapDispatch,
+            ...mod.actions.reduce((p, actionName) => {
+              p[actionName] = store._store[mod.module].actions[actionName];
+              return p;
+            }, {}),
+          };
+        } else {
+          const module = store._store[mod] || store._store[mod.module];
+          mapDispatch = { ...mapDispatch, ...module.actions };
+        }
+      });
+
+      return mapDispatch;
+    };
+    return connect(mapStateToProps, mapDispatchToProps)(WrapperComponent);
+  };
+};
 
 /**
  *
@@ -51,6 +105,8 @@ export const useRemoduler = (module) => {
   };
 };
 
+const Action = {};
+
 // 如何渐进改造呢?
 /**
  *  支持两种方式:  reducer 的改造:
@@ -68,7 +124,7 @@ const moduleA = {
         });
       };
     },
-    getAddress(latitude, longitude, addressName) {
+    setA(latitude, longitude, addressName) {
       return async (dispatch) => {
         dispatch({
           type: GET_ADDRESS_REQUEST,
@@ -146,7 +202,30 @@ const moduleA = {
     isHandle: false, // 是否手动选择
     addressInfo: null,
   },
-  reducer() {},
+  reducer(state = {}, action) {
+    switch (action.type) {
+      case Action.SET_ADDRESS:
+        return _.assign({}, state, action);
+
+      case Action.INIT_ADDRESS:
+        // 初始化所有数据
+        return _.assign({}, initData, {
+          type: action.type,
+        });
+      case Action.GET_ADDRESS_REQUEST:
+        return _.assign({}, state, {
+          type: action.type,
+        });
+      case Action.GET_ADDRESS_SUCCESS:
+        // 获取定位
+        return _.assign({}, state, {
+          type: action.type,
+          addressInfo: action.addressInfo,
+        });
+      default:
+        return state;
+    }
+  },
 };
 
 /**
@@ -187,6 +266,7 @@ const moduleB = {
   },
 };
 
+let store;
 export const configurationStore = (mods, middlewares) => {
   const ObjReducers = {};
   const Obj = {};
@@ -194,7 +274,7 @@ export const configurationStore = (mods, middlewares) => {
     if (mods.hasOwnProperty(modKey)) {
       const item = mods[modKey];
       if (item.type === "new") {
-        const { initState,  reducers, actions } = item;
+        const { initState, reducers, actions } = item;
         const { state = initState } = item;
         Obj[modKey] = { ...item, state };
 
@@ -213,13 +293,12 @@ export const configurationStore = (mods, middlewares) => {
           };
           item[key] = reducers[key];
         }
+
         ObjReducers[modKey] = (initState = {}, action) => {
-          switch (action.type) {
-            case modKey:
-              return action.payload;
-            default:
-              return initState;
+          if (action.type === modKey) {
+            return action.payload;
           }
+          return initState;
         };
         // actions
 
@@ -229,16 +308,38 @@ export const configurationStore = (mods, middlewares) => {
             action(store, ...args);
           };
         }
-        console.log(mods[modKey], " ----- @@@");
       } else {
+        ObjReducers[modKey] = item.reducer;
       }
 
       Obj[modKey] = mods[modKey];
     }
   }
 
-  const store = createStore(combineReducers(ObjReducers), {}, middlewares);
+  store = createStore(
+    combineReducers(ObjReducers),
+    {},
+    compose(
+      applyMiddleware(...middlewares, () => (next) => (action) => {
+        if (action.type.indexOf("/") > -1) {
+          // 当以 moduleB/actionName 为 type 时, 触发action which cause trigger action.type = modeKey
+          const [moduleName, actionName] = action.type.split("/");
+          const newModule = Obj[moduleName];
+          if (!newModule) {
+            console.warn(`${moduleName} 不在 store 中, 请检查`);
+            return next();
+          }
+
+          if (newModule.actions[actionName]) {
+            newModule.actions[actionName](action.payload);
+          }
+        }
+        next(action);
+      })
+    )
+  );
   store._store = Obj;
+  store.getNew = () => Obj;
   return store;
 };
 
@@ -247,5 +348,5 @@ export default configurationStore(
     moduleA,
     moduleB,
   },
-  compose(applyMiddleware(...[thunk]))
+  [thunk]
 );
